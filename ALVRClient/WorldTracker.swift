@@ -373,7 +373,50 @@ class WorldTracker {
     static let rightThumbstickTouched = alvr_path_string_to_id("/user/hand/right/input/thumbstick/touch")
     static let rightSystemTouched = alvr_path_string_to_id("/user/hand/right/input/system/touch")
     static let rightMenuTouched = alvr_path_string_to_id("/user/hand/right/input/menu/touch")
-    
+
+    static let psvrInputIds: [UInt64] = [
+        leftButtonX,
+        leftButtonXTouched,
+        leftButtonY,
+        leftButtonYTouched,
+        leftMenuClick,
+        leftMenuTouched,
+        leftSystemClick,
+        leftSystemTouched,
+        leftTriggerClick,
+        leftTriggerValue,
+        leftTriggerTouched,
+        leftTriggerSensorValue,
+        leftThumbstickY,
+        leftThumbstickX,
+        leftThumbstickClick,
+        leftThumbstickTouched,
+        leftSqueezeClick,
+        leftSqueezeValue,
+        leftSqueezeTouched,
+        leftSqueezeSensorValue,
+        rightButtonA,
+        rightButtonATouched,
+        rightButtonB,
+        rightButtonBTouched,
+        rightSystemClick,
+        rightSystemTouched,
+        rightMenuClick,
+        rightMenuTouched,
+        rightTriggerClick,
+        rightTriggerValue,
+        rightTriggerTouched,
+        rightTriggerSensorValue,
+        rightThumbstickY,
+        rightThumbstickX,
+        rightThumbstickClick,
+        rightThumbstickTouched,
+        rightSqueezeClick,
+        rightSqueezeValue,
+        rightSqueezeTouched,
+        rightSqueezeSensorValue,
+    ]
+
     static let appleHandToSteamVRIndex = [
         //eBone_Root
         "wrist": 1,                         //eBone_Wrist
@@ -568,8 +611,10 @@ class WorldTracker {
                 if let alvrSettings = Settings.getAlvrSettings() {
                     let emulationMode = alvrSettings.headset.controllers?.emulation_mode ?? ""
                     if emulationMode == "PSVR2Sense" && detectedPsvr {
-                            alvr_send_active_interaction_profile(WorldTracker.deviceIdLeftHand, WorldTracker.psvrInteractionProfile)
-                            alvr_send_active_interaction_profile(WorldTracker.deviceIdRightHand, WorldTracker.psvrInteractionProfile)
+                        WorldTracker.psvrInputIds.withUnsafeBufferPointer { inputIds in
+                            alvr_send_active_interaction_profile(WorldTracker.deviceIdLeftHand, WorldTracker.psvrInteractionProfile, inputIds.baseAddress, UInt64(inputIds.count))
+                            alvr_send_active_interaction_profile(WorldTracker.deviceIdRightHand, WorldTracker.psvrInteractionProfile, inputIds.baseAddress, UInt64(inputIds.count))
+                        }
                     }
                 }
                 for stylus in GCStylus.styli {
@@ -3005,8 +3050,7 @@ class WorldTracker {
             // Old API, currently in master/v20
             //alvr_send_tracking(reportedTargetTimestampNS, trackingMotions, UInt64(trackingMotions.count), [UnsafePointer(skeletonLeftPtr), UnsafePointer(skeletonRightPtr)], [UnsafePointer(eyeGazeLeftPtr), UnsafePointer(eyeGazeRightPtr)])
             
-            // New API, not upstreamed
-            alvr_send_tracking_and_face_data(reportedTargetTimestampNS, trackingMotions, UInt64(trackingMotions.count), [UnsafePointer(skeletonLeftPtr), UnsafePointer(skeletonRightPtr)], [UnsafePointer(eyeGazeLeftPtr), UnsafePointer(eyeGazeRightPtr)], UnsafePointer(fbFaceExpressions))
+            alvr_send_tracking(reportedTargetTimestampNS, trackingMotions, UInt64(trackingMotions.count), [UnsafePointer(skeletonLeftPtr), UnsafePointer(skeletonRightPtr)], nil)
 
             if self.needsRecenterTrigger {
                 // TODO raycast to the nearest wall/TV

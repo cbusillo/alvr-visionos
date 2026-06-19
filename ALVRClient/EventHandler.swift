@@ -167,6 +167,8 @@ class EventHandler: ObservableObject {
     var numberOfEventThreadRestarts: Int = 0
     var mdnsListener: NWListener? = nil
     var mdnsListenerRegistered = false
+    var mdnsBroadcastAttemptCount = 0
+    var mdnsListenerStartTime: Double = 0.0
     
     var stutterSampleStart = 0.0
     var stutterEventsCounted = 0
@@ -175,8 +177,6 @@ class EventHandler: ObservableObject {
     var needsEncoderReset = true
     var encodingGamma: Float = 1.0
     var enableHdr = false
-    
-    init() {}
     
     func initializeAlvr() {
         fixAudioForDirectStereo()
@@ -190,7 +190,7 @@ class EventHandler: ObservableObject {
                 refreshRates = [120, 100, 96, 90]
             }
 
-            let capabilities = AlvrClientCapabilities(default_view_width: UInt32(renderWidth*2), default_view_height: UInt32(renderHeight*2), refresh_rates: refreshRates, refresh_rates_count: UInt64(refreshRates.count), foveated_encoding: true, encoder_high_profile: true, encoder_10_bits: true, encoder_av1: VTIsHardwareDecodeSupported(kCMVideoCodecType_AV1), prefer_10bit: true, prefer_full_range: true, preferred_encoding_gamma: 1.5, prefer_hdr: false)
+            let capabilities = AlvrClientCapabilities(default_view_width: UInt32(renderWidth*2), default_view_height: UInt32(renderHeight*2), max_view_width: UInt32(renderWidth*2), max_view_height: UInt32(renderHeight*2), refresh_rates: refreshRates, refresh_rates_count: UInt64(refreshRates.count), foveated_encoding: true, encoder_high_profile: true, encoder_10_bits: true, encoder_av1: VTIsHardwareDecodeSupported(kCMVideoCodecType_AV1), prefer_10bit: true, preferred_encoding_gamma: 1.5, prefer_hdr: false)
             alvr_initialize(/*capabilities=*/capabilities)
             alvr_initialize_logging()
             alvr_set_decoder_input_callback(nil, { data in return EventHandler.shared.handleNals(frameData: data) })
@@ -200,6 +200,7 @@ class EventHandler: ObservableObject {
     
     // Starts the EventHandler thread.
     func start() {
+        print("EventHandler.start inputRunning=\(inputRunning) alvrInitialized=\(alvrInitialized)")
         alvr_resume()
 
         fixAudioForDirectStereo()
@@ -313,50 +314,101 @@ class EventHandler: ObservableObject {
     func handleMdnsBroadcasts() {
         // HACK: Some mDNS clients seem to only see edge updates (ie, when a client appears/disappears)
         // so we just create/destroy this every 2s until we're streaming.
-        timeLastSentMdnsBroadcast = CACurrentMediaTime()
+        let currentTime = CACurrentMediaTime()
+        timeLastSentMdnsBroadcast = currentTime
         if mdnsListener != nil {
-            mdnsListener!.cancel()
+            let listenerAge = currentTime - mdnsListenerStartTime
+            if !streamingActive {
+                let state = mdnsListenerRegistered ? "published" : "pending"
+                print("mDNS keeping NWListener alive state=\(state) age=\(listenerAge)")
+                return
+            }
+            print("mDNS cancelling previous listener before attempt #\(mdnsBroadcastAttemptCount)")
+            mdnsListener?.cancel()
             mdnsListener = nil
             mdnsListenerRegistered = false
         }
 
         if mdnsListener == nil && !streamingActive {
-            do {
-                mdnsListener = try NWListener(using: .tcp)
-            } catch {
-                mdnsListener = nil
-                print("Failed to create mDNS NWListener?")
-            }
-            
-            if let listener = mdnsListener {
-                let txtRecord = NWTXTRecord(["protocol" : getMdnsProtocolId(), "device_id" : getHostname(), "salt" : CACurrentMediaTime().description])
-                listener.service = NWListener.Service(name: "ALVR Apple Vision Pro", type: getMdnsService(), txtRecord: txtRecord)
+            mdnsBroadcastAttemptCount += 1
+            let serviceType = getMdnsService()
+            let protocolId = getMdnsProtocolId()
+            let hostname = getHostname()
+            let bonjourServices = Bundle.main.object(forInfoDictionaryKey: "NSBonjourServices") ?? "missing"
+            let localNetworkUsage = Bundle.main.object(forInfoDictionaryKey: "NSLocalNetworkUsageDescription") ?? "missing"
+            print("mDNS plist: NSBonjourServices=\(bonjourServices) NSLocalNetworkUsageDescription=\(localNetworkUsage)")
+            print("mDNS publish attempt #\(mdnsBroadcastAttemptCount): service=\(serviceType) protocol=\(protocolId) device_id=\(hostname)")
 
-                // Handle errors if any
-                listener.stateUpdateHandler = { newState in
-                    switch newState {
-                    case .ready:
-                        print("mDNS listener is ready")
-                    case .waiting(let error):
-                        print("mDNS listener is waiting with error: \(error)")
-                    case .failed(let error):
-                        print("mDNS listener failed with error: \(error)")
-                    default:
-                        break
+            publishMdnsListener(
+                serviceType: serviceType,
+                protocolId: protocolId,
+                hostname: hostname,
+                startTime: currentTime
+            )
+        } else if streamingActive {
+            print("mDNS publish skipped because streaming is active")
+        }
+    }
+
+    func publishMdnsListener(serviceType: String, protocolId: String, hostname: String, startTime: Double) {
+        let bonjourType = serviceType.trimmingCharacters(in: CharacterSet(charactersIn: "."))
+        let txtRecord = NWTXTRecord([
+            "protocol": protocolId,
+            "device_id": hostname,
+            "salt": CACurrentMediaTime().description,
+        ])
+        let service = NWListener.Service(name: "ALVR Apple Vision Pro", type: bonjourType, domain: "local.", txtRecord: txtRecord)
+
+        do {
+            let listener = try NWListener(using: .tcp, on: 0)
+            listener.service = service
+            listener.newConnectionHandler = { connection in
+                print("mDNS NWListener received diagnostic connection from \(connection.endpoint)")
+                connection.cancel()
+            }
+            listener.stateUpdateHandler = { [weak self, weak listener] state in
+                guard let self else { return }
+                switch state {
+                case .setup:
+                    print("mDNS NWListener state: setup")
+                case .waiting(let error):
+                    print("mDNS NWListener state: waiting error=\(error)")
+                    self.mdnsListenerRegistered = false
+                case .ready:
+                    let publishedPort = listener?.port.map { String($0.rawValue) } ?? "unknown"
+                    print("mDNS NWListener state: ready port=\(publishedPort) service=\(bonjourType)")
+                    self.timeLastSentMdnsBroadcast = CACurrentMediaTime()
+                case .failed(let error):
+                    print("mDNS NWListener state: failed error=\(error)")
+                    self.mdnsListenerRegistered = false
+                    if self.mdnsListener === listener {
+                        self.mdnsListener = nil
                     }
-                    self.timeLastSentMdnsBroadcast = CACurrentMediaTime()
+                case .cancelled:
+                    print("mDNS NWListener state: cancelled")
+                    if self.mdnsListener === listener {
+                        self.mdnsListener = nil
+                        self.mdnsListenerRegistered = false
+                    }
+                @unknown default:
+                    print("mDNS NWListener state: unknown \(state)")
                 }
-                listener.serviceRegistrationUpdateHandler = { change in
-                    print("mDNS registration updated:", change)
-                    self.timeLastSentMdnsBroadcast = CACurrentMediaTime()
-                    self.mdnsListenerRegistered = true
-                }
-                listener.newConnectionHandler = { connection in
-                    connection.cancel()
-                }
-
-                listener.start(queue: DispatchQueue.global(qos: .background))
             }
+            listener.serviceRegistrationUpdateHandler = { [weak self] change in
+                print("mDNS NWListener registration update: \(change)")
+                self?.mdnsListenerRegistered = true
+                self?.timeLastSentMdnsBroadcast = CACurrentMediaTime()
+            }
+
+            mdnsListener = listener
+            mdnsListenerRegistered = false
+            mdnsListenerStartTime = startTime
+            print("mDNS NWListener publish requested: domain=local. type=\(bonjourType) port=auto")
+            listener.start(queue: .main)
+        } catch {
+            print("mDNS NWListener creation failed: \(error)")
+            mdnsListener = nil
+            mdnsListenerRegistered = false
         }
     }
 
@@ -399,10 +451,8 @@ class EventHandler: ObservableObject {
                 let state = UIApplication.shared.applicationState
                 if state == .background {
                     print("App in background, exiting")
-                    if let service = self.mdnsListener {
-                        service.cancel()
-                        self.mdnsListener = nil
-                    }
+                    self.mdnsListener?.cancel()
+                    self.mdnsListener = nil
                     exit(0)
                 }
             }
@@ -489,7 +539,7 @@ class EventHandler: ObservableObject {
         
         let startedDecodeTime = CACurrentMediaTime()
         
-        if currentCodec == ALVR_CODEC_AV1.rawValue && !av1InstantiatedForReal {
+        if currentCodec == ALVR_CODEC_TYPE_AV1.rawValue && !av1InstantiatedForReal {
             print("Creating AV1 codec for real now.")
             let (attemptVtDecompressionSession, attemptVideoFormat) = VideoHandler.createVideoDecoder(initialNals: nal, codec: currentCodec)
             if attemptVtDecompressionSession != nil && attemptVideoFormat != nil {
@@ -621,7 +671,7 @@ class EventHandler: ObservableObject {
         }
         
         if let utf8String = String(bytes: byteArray, encoding: .utf8) {
-            let ret = utf8String.trimmingCharacters(in: ["\0"]);
+            let ret = utf8String.trimmingCharacters(in: ["\0", "."]);
             return ret + ".alvr"; // Hack: runtime needs to fix this D:
         } else {
             print("Unable to decode alvr_hostname into a UTF-8 string.")
@@ -641,7 +691,9 @@ class EventHandler: ObservableObject {
         
         if let utf8String = String(bytes: byteArray, encoding: .utf8) {
             let ret = utf8String.trimmingCharacters(in: ["\0"]);
-            return ret.replacing(".local", with: "", maxReplacements: 1);
+            return ret.replacing(".local.", with: "", maxReplacements: 1)
+                .replacing(".local", with: "", maxReplacements: 1)
+                .trimmingCharacters(in: ["."]);
         } else {
             print("Unable to decode alvr_mdns_service into a UTF-8 string.")
             return "_alvr._tcp";
@@ -688,6 +740,7 @@ class EventHandler: ObservableObject {
         Thread.setThreadPriority(0.9)
         currentCodec = -1
         av1InstantiatedForReal = false
+        handleMdnsBroadcasts()
         while inputRunning {
             eventHeartbeat += 1
             // Send periodic updated values, such as battery percentage, once every five seconds
@@ -705,10 +758,8 @@ class EventHandler: ObservableObject {
                     let state = UIApplication.shared.applicationState
                     if state == .background {
                         print("App in background, exiting")
-                        if let service = self.mdnsListener {
-                            service.cancel()
-                            self.mdnsListener = nil
-                        }
+                        self.mdnsListener?.cancel()
+                        self.mdnsListener = nil
                         exit(0)
                     }
                 }
