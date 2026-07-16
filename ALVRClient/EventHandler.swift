@@ -111,7 +111,27 @@ class EventHandler: ObservableObject {
     var eventsWatchThread : Thread?
         
     var alvrInitialized = false
-    var streamingActive = false
+    private let streamingStateLock = NSLock()
+    private var streamingActiveStorage = false
+    var streamingActive: Bool {
+        get {
+            streamingStateLock.lock()
+            defer { streamingStateLock.unlock() }
+            return streamingActiveStorage
+        }
+        set {
+            streamingStateLock.lock()
+            streamingActiveStorage = newValue
+            streamingStateLock.unlock()
+        }
+    }
+
+    func withStreamingActive<T>(_ body: () -> T) -> T? {
+        streamingStateLock.lock()
+        defer { streamingStateLock.unlock() }
+        guard streamingActiveStorage else { return nil }
+        return body()
+    }
     
     
     @Published var connectionState: ConnectionState = .disconnected
@@ -149,6 +169,9 @@ class EventHandler: ObservableObject {
 
     var framesSinceLastIDR:Int = 0
     var framesSinceLastDecode:Int = 0
+    var videoPacketsReceived: UInt64 = 0
+    var decoderSubmissions: UInt64 = 0
+    var decoderCallbacks: UInt64 = 0
 
     var streamEvent: AlvrEvent? = nil
     
@@ -492,6 +515,10 @@ class EventHandler: ObservableObject {
             PerformanceTracker.shared.recordReceive(timestampNs: timestamp)
         }
         let nal = UnsafeMutableBufferPointer<UInt8>(start: UnsafeMutablePointer(mutating: frameData.buffer_ptr), count: Int(frameData.buffer_size))
+        videoPacketsReceived += 1
+        if videoPacketsReceived == 1 || videoPacketsReceived.isMultiple(of: 300) {
+            print("Video packet cadence received=\(videoPacketsReceived) bytes=\(nal.count) render_started=\(renderStarted) reset_pending=\(needsEncoderReset) timestamp_ns=\(timestamp)")
+        }
         
         objc_sync_enter(self.frameQueueLock)
         self.framesSinceLastIDR += 1
@@ -550,7 +577,15 @@ class EventHandler: ObservableObject {
         }
 
         if let vtDecompressionSession = self.vtDecompressionSession {
+            decoderSubmissions += 1
+            if decoderSubmissions == 1 || decoderSubmissions.isMultiple(of: 300) {
+                print("VideoToolbox decode submission cadence submitted=\(decoderSubmissions) received=\(videoPacketsReceived) bytes=\(nal.count) timestamp_ns=\(timestamp)")
+            }
             VideoHandler.feedVideoIntoDecoder(decompressionSession: vtDecompressionSession, nals: nal, timestamp: timestamp, videoFormat: self.videoFormat!, codec: currentCodec) { [self] imageBuffer in
+                decoderCallbacks += 1
+                if decoderCallbacks == 1 || decoderCallbacks.isMultiple(of: 300) {
+                    print("VideoToolbox decode callback cadence callbacks=\(decoderCallbacks) submitted=\(decoderSubmissions) image_ready=\(imageBuffer != nil) timestamp_ns=\(timestamp)")
+                }
                 guard let imageBuffer = imageBuffer else {
                     //print("Frame not decoded")
                     return
@@ -845,12 +880,12 @@ class EventHandler: ObservableObject {
                 enableHdr = alvrEvent.STREAMING_STARTED.enable_hdr
                 if !streamingActive {
                     streamEvent = alvrEvent
-                    streamingActive = true
                     resetEncoding()
                     framesSinceLastIDR = 0
                     framesSinceLastDecode = 0
                     lastIpd = -1
                     currentCodec = -1
+                    streamingActive = true
                     EventHandler.shared.updateConnectionState(.connected)
                 }
                 if !renderStarted {
@@ -858,7 +893,6 @@ class EventHandler: ObservableObject {
                 }
                 Settings.clearSettingsCache()
             case ALVR_EVENT_STREAMING_STOPPED.rawValue:
-                print("streaming stopped")
                 if streamingActive {
                     streamingActive = false
                     stop()
@@ -866,6 +900,7 @@ class EventHandler: ObservableObject {
                     timeLastFrameSent = CACurrentMediaTime()
                     currentCodec = -1
                 }
+                print("streaming stopped")
                 Settings.clearSettingsCache()
                 clearHostVersion()
             case ALVR_EVENT_HAPTICS.rawValue:

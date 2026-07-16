@@ -602,7 +602,9 @@ struct VideoHandler {
         err = VTDecompressionSessionDecodeFrame(decompressionSession, sampleBuffer: sampleBuffer, flags: VTDecodeFrameFlags.init(rawValue: 0), infoFlagsOut: nil) { (status: OSStatus, infoFlags: VTDecodeInfoFlags, imageBuffer: CVImageBuffer?, taggedBuffers: [CMTaggedBuffer]?, presentationTimeStamp: CMTime, presentationDuration: CMTime) in
         
             if status < 0 {
-                //print("Error while decoding:", status, infoFlags, imageBuffer, taggedBuffers, presentationTimeStamp, presentationDuration)
+                print("VideoToolbox decode callback error status=\(status) info_flags=\(infoFlags.rawValue) image_ready=\(imageBuffer != nil) bytes=\(nals.count) timestamp_ns=\(timestamp)")
+            } else if imageBuffer == nil {
+                print("VideoToolbox decode callback returned no image info_flags=\(infoFlags.rawValue) bytes=\(nals.count) timestamp_ns=\(timestamp)")
             }
             //print("status: \(status), image_nil?: \(imageBuffer == nil), infoFlags: \(infoFlags)")
             
@@ -620,7 +622,7 @@ struct VideoHandler {
             callback(imageBuffer)
         }
         if err != 0 {
-            //fatalError("VTDecompressionSessionDecodeFrame")
+            print("VideoToolbox decode submission error status=\(err) bytes=\(nals.count) timestamp_ns=\(timestamp)")
         }
     }
     
