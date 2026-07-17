@@ -133,8 +133,8 @@ struct ALVRClientApp: App {
             .task {
                 model.isShowingClient = false
                 EventHandler.shared.initializeAlvr()
-                await WorldTracker.shared.initializeAr()
                 EventHandler.shared.start()
+                await WorldTracker.shared.initializeAr()
             }
             .onChange(of: observedGStore.settings.enableProgressive) {
                 realityKitImmersionStyle = ALVRClientApp.gStore.settings.enableProgressive ? .progressive : .mixed

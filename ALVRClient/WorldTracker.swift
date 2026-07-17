@@ -373,7 +373,50 @@ class WorldTracker {
     static let rightThumbstickTouched = alvr_path_string_to_id("/user/hand/right/input/thumbstick/touch")
     static let rightSystemTouched = alvr_path_string_to_id("/user/hand/right/input/system/touch")
     static let rightMenuTouched = alvr_path_string_to_id("/user/hand/right/input/menu/touch")
-    
+
+    static let psvrInputIds: [UInt64] = [
+        leftButtonX,
+        leftButtonXTouched,
+        leftButtonY,
+        leftButtonYTouched,
+        leftMenuClick,
+        leftMenuTouched,
+        leftSystemClick,
+        leftSystemTouched,
+        leftTriggerClick,
+        leftTriggerValue,
+        leftTriggerTouched,
+        leftTriggerSensorValue,
+        leftThumbstickY,
+        leftThumbstickX,
+        leftThumbstickClick,
+        leftThumbstickTouched,
+        leftSqueezeClick,
+        leftSqueezeValue,
+        leftSqueezeTouched,
+        leftSqueezeSensorValue,
+        rightButtonA,
+        rightButtonATouched,
+        rightButtonB,
+        rightButtonBTouched,
+        rightSystemClick,
+        rightSystemTouched,
+        rightMenuClick,
+        rightMenuTouched,
+        rightTriggerClick,
+        rightTriggerValue,
+        rightTriggerTouched,
+        rightTriggerSensorValue,
+        rightThumbstickY,
+        rightThumbstickX,
+        rightThumbstickClick,
+        rightThumbstickTouched,
+        rightSqueezeClick,
+        rightSqueezeValue,
+        rightSqueezeTouched,
+        rightSqueezeSensorValue,
+    ]
+
     static let appleHandToSteamVRIndex = [
         //eBone_Root
         "wrist": 1,                         //eBone_Wrist
@@ -568,8 +611,10 @@ class WorldTracker {
                 if let alvrSettings = Settings.getAlvrSettings() {
                     let emulationMode = alvrSettings.headset.controllers?.emulation_mode ?? ""
                     if emulationMode == "PSVR2Sense" && detectedPsvr {
-                            alvr_send_active_interaction_profile(WorldTracker.deviceIdLeftHand, WorldTracker.psvrInteractionProfile)
-                            alvr_send_active_interaction_profile(WorldTracker.deviceIdRightHand, WorldTracker.psvrInteractionProfile)
+                        WorldTracker.psvrInputIds.withUnsafeBufferPointer { inputIds in
+                            alvr_send_active_interaction_profile(WorldTracker.deviceIdLeftHand, WorldTracker.psvrInteractionProfile, inputIds.baseAddress, UInt64(inputIds.count))
+                            alvr_send_active_interaction_profile(WorldTracker.deviceIdRightHand, WorldTracker.psvrInteractionProfile, inputIds.baseAddress, UInt64(inputIds.count))
+                        }
                     }
                 }
                 for stylus in GCStylus.styli {
@@ -3005,8 +3050,7 @@ class WorldTracker {
             // Old API, currently in master/v20
             //alvr_send_tracking(reportedTargetTimestampNS, trackingMotions, UInt64(trackingMotions.count), [UnsafePointer(skeletonLeftPtr), UnsafePointer(skeletonRightPtr)], [UnsafePointer(eyeGazeLeftPtr), UnsafePointer(eyeGazeRightPtr)])
             
-            // New API, not upstreamed
-            alvr_send_tracking_and_face_data(reportedTargetTimestampNS, trackingMotions, UInt64(trackingMotions.count), [UnsafePointer(skeletonLeftPtr), UnsafePointer(skeletonRightPtr)], [UnsafePointer(eyeGazeLeftPtr), UnsafePointer(eyeGazeRightPtr)], UnsafePointer(fbFaceExpressions))
+            alvr_send_tracking(reportedTargetTimestampNS, trackingMotions, UInt64(trackingMotions.count), [UnsafePointer(skeletonLeftPtr), UnsafePointer(skeletonRightPtr)], nil)
 
             if self.needsRecenterTrigger {
                 // TODO raycast to the nearest wall/TV
@@ -3053,14 +3097,16 @@ class WorldTracker {
         
         var trackingMotions:[AlvrDeviceMotion] = []
         
-        let dummyPoseView = AlvrPose()
-        let dummyPoseHeadset = AlvrPose(orientation: AlvrQuat(simd_quatf()), position: (0.0, 1.2, 0.0)) // keep the dummy at a reasonable height for both seated/standing entry
+        let identityOrientation = AlvrQuat(x: 0.0, y: 0.0, z: 0.0, w: 1.0)
+        let dummyPoseLeftView = AlvrPose(orientation: identityOrientation, position: (-0.032, 0.0, 0.0))
+        let dummyPoseRightView = AlvrPose(orientation: identityOrientation, position: (0.032, 0.0, 0.0))
+        let dummyPoseHeadset = AlvrPose(orientation: identityOrientation, position: (0.0, 1.2, 0.0)) // keep the dummy at a reasonable height for both seated/standing entry
         let targetTimestampNS = UInt64(targetTimestamp * Double(NSEC_PER_SEC))
         
         let viewFovsPtr = UnsafeMutablePointer<AlvrViewParams>.allocate(capacity: 2)
         defer { viewFovsPtr.deallocate() }
-        viewFovsPtr[0] = AlvrViewParams(pose: dummyPoseView, fov: viewFovs[0])
-        viewFovsPtr[1] = AlvrViewParams(pose: dummyPoseView, fov: viewFovs[1])
+        viewFovsPtr[0] = AlvrViewParams(pose: dummyPoseLeftView, fov: viewFovs[0])
+        viewFovsPtr[1] = AlvrViewParams(pose: dummyPoseRightView, fov: viewFovs[1])
         
         let headLinVel: (Float, Float, Float) = (0,0,0)
         let headAngVel: (Float, Float, Float) = (0,0,0)

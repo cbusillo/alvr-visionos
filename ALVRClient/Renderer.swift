@@ -897,22 +897,28 @@ class Renderer {
         }
 
         // List of reasons to not display a frame
-        var frameIsSuitableForDisplaying = true
-        //print(EventHandler.shared.lastIpd, WorldTracker.shared.worldTrackingAddedOriginAnchor, EventHandler.shared.framesRendered)
-        if EventHandler.shared.lastIpd == -1 || EventHandler.shared.framesRendered < Int(refreshRate) {
-            // Don't show frame if we haven't sent the view config and received frames
-            // with that config applied.
-            frameIsSuitableForDisplaying = false
-            print("IPD is bad, no frame", EventHandler.shared.framesRendered)
-        }
-        if !WorldTracker.shared.worldTrackingAddedOriginAnchor && EventHandler.shared.framesRendered < 300 {
-            // Don't show frame if we haven't figured out our origin yet.
-            frameIsSuitableForDisplaying = false
-            print("Origin is bad, no frame")
-        }
-        if EventHandler.shared.videoFormat == nil {
-            frameIsSuitableForDisplaying = false
-            print("Missing video format, no frame")
+        var frameIsSuitableForDisplaying = streamingActiveForFrame
+        if streamingActiveForFrame {
+            if let suitable = EventHandler.shared.withStreamingActive({
+                var suitable = true
+                if EventHandler.shared.lastIpd == -1 || EventHandler.shared.framesRendered < Int(refreshRate) {
+                    suitable = false
+                    print("IPD is bad, no frame", EventHandler.shared.framesRendered)
+                }
+                if !WorldTracker.shared.worldTrackingAddedOriginAnchor && EventHandler.shared.framesRendered < 300 {
+                    suitable = false
+                    print("Origin is bad, no frame")
+                }
+                if EventHandler.shared.videoFormat == nil {
+                    suitable = false
+                    print("Missing video format, no frame")
+                }
+                return suitable
+            }) {
+                frameIsSuitableForDisplaying = suitable
+            } else {
+                frameIsSuitableForDisplaying = false
+            }
         }
         
         if !(renderingStreaming && frameIsSuitableForDisplaying && queuedFrame != nil) {

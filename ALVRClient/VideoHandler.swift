@@ -126,12 +126,12 @@ struct VideoHandler {
         var videoFormat:CMFormatDescription? = nil
         var err:OSStatus = 0
         
-        if (codec == ALVR_CODEC_H264.rawValue) {
+        if (codec == ALVR_CODEC_TYPE_H264.rawValue) {
             (err, videoFormat) = createH264VideoDecoderDesc(initialNals: initialNals)
-        } else if (codec == ALVR_CODEC_HEVC.rawValue) {
+        } else if (codec == ALVR_CODEC_TYPE_HEVC.rawValue) {
             (err, videoFormat) = createHEVCVideoDecoderDesc(initialNals: initialNals)
         }
-        else if codec == ALVR_CODEC_AV1.rawValue {
+        else if codec == ALVR_CODEC_TYPE_AV1.rawValue {
             if initialNals.count == 0 {
                 (err, videoFormat) = createFakeAV1VideoDecoderDesc()
             }
@@ -592,7 +592,7 @@ struct VideoHandler {
     static func feedVideoIntoDecoder(decompressionSession: VTDecompressionSession, nals: UnsafeMutableBufferPointer<UInt8>, timestamp: UInt64, videoFormat: CMFormatDescription, codec: Int, callback: @escaping (_ imageBuffer: CVImageBuffer?) -> Void) {
         var err:OSStatus = 0
         guard let sampleBuffer =
-            (codec == ALVR_CODEC_AV1.rawValue) ?
+            (codec == ALVR_CODEC_TYPE_AV1.rawValue) ?
                 bufferToCMSampleBuffer(buffer: nals, videoFormat: videoFormat) // OBUs
                 : annexBBufferToCMSampleBuffer(buffer: nals, videoFormat: videoFormat) // NALs
         else {
@@ -602,7 +602,9 @@ struct VideoHandler {
         err = VTDecompressionSessionDecodeFrame(decompressionSession, sampleBuffer: sampleBuffer, flags: VTDecodeFrameFlags.init(rawValue: 0), infoFlagsOut: nil) { (status: OSStatus, infoFlags: VTDecodeInfoFlags, imageBuffer: CVImageBuffer?, taggedBuffers: [CMTaggedBuffer]?, presentationTimeStamp: CMTime, presentationDuration: CMTime) in
         
             if status < 0 {
-                //print("Error while decoding:", status, infoFlags, imageBuffer, taggedBuffers, presentationTimeStamp, presentationDuration)
+                print("VideoToolbox decode callback error status=\(status) info_flags=\(infoFlags.rawValue) image_ready=\(imageBuffer != nil) bytes=\(nals.count) timestamp_ns=\(timestamp)")
+            } else if imageBuffer == nil {
+                print("VideoToolbox decode callback returned no image info_flags=\(infoFlags.rawValue) bytes=\(nals.count) timestamp_ns=\(timestamp)")
             }
             //print("status: \(status), image_nil?: \(imageBuffer == nil), infoFlags: \(infoFlags)")
             
@@ -611,7 +613,7 @@ struct VideoHandler {
                 EventHandler.shared.framesSinceLastIDR = 0
                 EventHandler.shared.resetEncoding()
                 
-                if codec == ALVR_CODEC_AV1.rawValue {
+                if codec == ALVR_CODEC_TYPE_AV1.rawValue {
                     //alvr_report_fatal_decoder_error("VideoToolbox decoder failed with status: \(status)")
                 }
                 //alvr_report_fatal_decoder_error("VideoToolbox decoder failed with status: \(status)")
@@ -620,7 +622,7 @@ struct VideoHandler {
             callback(imageBuffer)
         }
         if err != 0 {
-            //fatalError("VTDecompressionSessionDecodeFrame")
+            print("VideoToolbox decode submission error status=\(err) bytes=\(nals.count) timestamp_ns=\(timestamp)")
         }
     }
     
