@@ -1,5 +1,11 @@
 Repository Guidelines
 
+## What ALVR for visionOS does
+
+ALVR for visionOS is the Apple Vision Pro client for ALVR's PC VR streaming system.
+This repository holds the platform-specific headset app; the PC streaming software lives in ALVR.
+Evidence: [README.md](README.md) and the ALVRClient source layout below.
+
 ## Project Structure & Module Organization
 - `ALVRClient/` contains the visionOS client sources (Swift, Metal shaders, assets).
 - `ALVREyeBroadcast/` contains the ReplayKit extension sources.
